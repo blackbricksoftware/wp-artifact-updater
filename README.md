@@ -8,7 +8,7 @@ plugin like any other: update notice, one-click update, and the per-plugin
 "Enable auto-updates" toggle all start working.
 
 ```php
-use BlackBrickSoftware\WpUpdater\V1\{Updater, BitbucketDownloads};
+use BlackBrickSoftware\WpArtifactUpdater\V1\{Updater, BitbucketDownloads};
 
 Updater::register([
   'plugin_file'   => __FILE__,
@@ -180,7 +180,7 @@ A Bitbucket pipeline doing all three:
 
 ## Namespacing
 
-The namespace carries a major version — `BlackBrickSoftware\WpUpdater\V1` — and
+The namespace carries a major version — `BlackBrickSoftware\WpArtifactUpdater\V1` — and
 the layout mirrors it:
 
 ```
@@ -188,7 +188,7 @@ src/
   V1/   Source.php  Updater.php  BitbucketDownloads.php  GitHubReleases.php
 ```
 
-PSR-4 maps `BlackBrickSoftware\WpUpdater\` to `src/`, so a breaking change is a
+PSR-4 maps `BlackBrickSoftware\WpArtifactUpdater\` to `src/`, so a breaking change is a
 new `src/V2/` directory and nothing else: no autoload change, and V1 keeps
 working for plugins that haven't moved.
 

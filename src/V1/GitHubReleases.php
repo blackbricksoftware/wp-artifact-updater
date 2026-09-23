@@ -1,6 +1,6 @@
 <?php
 
-namespace BlackBrickSoftware\WpUpdater\V1;
+namespace BlackBrickSoftware\WpArtifactUpdater\V1;
 
 /**
  * Releases from GitHub **release assets**.

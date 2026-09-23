@@ -1,6 +1,6 @@
 <?php
 
-namespace BlackBrickSoftware\WpUpdater\V1;
+namespace BlackBrickSoftware\WpArtifactUpdater\V1;
 
 /**
  * WordPress updates for a plugin that does not live on wordpress.org.

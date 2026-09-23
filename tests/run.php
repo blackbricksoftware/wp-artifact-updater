@@ -28,7 +28,7 @@ namespace {
   function __($s, $d = null) { return $s; }
 }
 
-namespace BlackBrickSoftware\WpUpdater\V1 {
+namespace BlackBrickSoftware\WpArtifactUpdater\V1 {
   require __DIR__ . '/../src/V1/Source.php';
   require __DIR__ . '/../src/V1/Updater.php';
   require __DIR__ . '/../src/V1/BitbucketDownloads.php';

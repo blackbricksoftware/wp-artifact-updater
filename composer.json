@@ -5,7 +5,7 @@
     "license": "MIT",
     "autoload": {
         "psr-4": {
-            "BlackBrickSoftware\\WpUpdater\\": "src/"
+            "BlackBrickSoftware\\WpArtifactUpdater\\": "src/"
         }
     },
     "authors": [
