@@ -1,6 +1,6 @@
 {
-    "name": "blackbricksoftware/wp-plugin-updater",
-    "description": "WordPress plugin updates from a private release artifact (Bitbucket Downloads), for plugins distributed outside wordpress.org.",
+    "name": "blackbricksoftware/wp-artifact-updater",
+    "description": "WordPress plugin updates from the release artifact your pipeline publishes (Bitbucket Downloads or GitHub release assets), for plugins distributed outside wordpress.org.",
     "type": "library",
     "license": "MIT",
     "autoload": {

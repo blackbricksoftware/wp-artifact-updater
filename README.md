@@ -1,4 +1,4 @@
-# wp-plugin-updater
+# wp-artifact-updater
 
 WordPress updates for plugins that don't live on wordpress.org.
 
@@ -60,7 +60,7 @@ actually tested.
 ## Install
 
 ```bash
-composer require blackbricksoftware/wp-plugin-updater
+composer require blackbricksoftware/wp-artifact-updater
 ```
 
 Requires PHP 8.0+ and WordPress 4.6+ (5.8+ uses the better `Update URI` path

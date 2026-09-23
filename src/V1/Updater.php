@@ -196,7 +196,7 @@ final class Updater {
         'wp_updater_download_unresolved',
         sprintf(
           /* translators: %s: plugin name. */
-          __('Could not resolve the download for %s. Check its update credential.', 'wp-plugin-updater'),
+          __('Could not resolve the download for %s. Check its update credential.', 'wp-artifact-updater'),
           $this->slug
         )
       );
