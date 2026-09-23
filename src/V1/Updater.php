@@ -287,7 +287,7 @@ final class Updater {
    */
   private function latestRelease(): ?array
   {
-    $key = 'wpu_release_' . md5($this->basename . '|' . $this->source->updateHost());
+    $key = $this->cacheKey();
 
     $cached = get_site_transient($key);
     if (is_array($cached)) {
@@ -302,6 +302,68 @@ final class Updater {
     );
 
     return $release;
+  }
+
+  /**
+   * Forget the cached release so the next check really asks the host.
+   *
+   * WordPress asks us at most twice a day and we answer from a six-hour cache,
+   * so a release published minutes ago can be invisible with nothing wrong
+   * anywhere. A consumer offering a "check now" button, or reacting to a
+   * credential being changed, needs to clear this or it will just re-read the
+   * stale answer.
+   */
+  public function flush(): void
+  {
+    delete_site_transient($this->cacheKey());
+  }
+
+  /**
+   * Forget everything cached about this plugin's updates — ours AND WordPress's
+   * — so the very next check really asks the host.
+   *
+   * Clearing our cache alone is not enough: WordPress keeps its own
+   * plugin-update transient and will not re-ask us until its timeout expires
+   * (`wp_update_plugins()` skips the whole cycle while
+   * `$timeout > time() - $current->last_checked`, which is twelve hours in the
+   * ordinary case). Clearing only WordPress's is not enough either, because
+   * then we answer from our own six-hour cache. Both, or a release published
+   * minutes ago stays invisible with nothing wrong anywhere.
+   *
+   * Deliberately NOT `delete_site_transient('update_plugins')`: that discards
+   * what WordPress knows about every OTHER plugin on the site too. Zeroing
+   * `last_checked` reopens the cycle just as effectively, and dropping only our
+   * own entries makes sure a stale "update available" from a credential that
+   * has since been revoked does not survive the check.
+   *
+   * Call it from a "check now" control, and whenever the credential changes —
+   * a "no release found" cached against the old credential otherwise makes a
+   * good new one look broken.
+   */
+  public function forceRecheck(): void
+  {
+    $this->flush();
+
+    $transient = get_site_transient('update_plugins');
+    if (!is_object($transient)) {
+      // Nothing cached yet; the next wp_update_plugins() will ask anyway.
+      return;
+    }
+
+    unset(
+      $transient->response[$this->basename],
+      $transient->no_update[$this->basename],
+      $transient->checked[$this->basename]
+    );
+    $transient->last_checked = 0;
+
+    set_site_transient('update_plugins', $transient);
+  }
+
+  /** Where this plugin's release answer is cached. */
+  private function cacheKey(): string
+  {
+    return 'wpu_release_' . md5($this->basename . '|' . $this->source->updateHost());
   }
 
   /** Authorization header value, or '' when there is none. */

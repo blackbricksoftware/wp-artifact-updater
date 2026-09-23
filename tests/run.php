@@ -188,6 +188,39 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1 {
   chk('private GitHub with no credential -> inert', register(['source' => new GitHubReleases('acme/my-plugin', true), 'authorization' => static fn(): string => '']) === null);
 
 
+  echo "== flushing the release cache\n";
+  reset_state();
+  $GLOBALS['HTTP'] = fn($u, $a) => bb_listing(['my-plugin-v2.0.0.zip']);
+  $f = register();
+  $f->filterUpdate(false, ['Version' => '1.0.0'], 'my-plugin/my-plugin.php');
+  $f->filterUpdate(false, ['Version' => '1.0.0'], 'my-plugin/my-plugin.php');
+  chk('second check answered from cache', count($GLOBALS['REQUESTS']) === 1);
+  $f->flush();
+  $f->filterUpdate(false, ['Version' => '1.0.0'], 'my-plugin/my-plugin.php');
+  chk('after flush() the host is asked again', count($GLOBALS['REQUESTS']) === 2);
+
+  echo "== forceRecheck()\n";
+  reset_state();
+  $GLOBALS['HTTP'] = fn($u, $a) => bb_listing(['my-plugin-v2.0.0.zip']);
+  $fr = register();
+  $fr->filterUpdate(false, ['Version' => '1.0.0'], 'my-plugin/my-plugin.php');
+  $GLOBALS['TRANSIENTS']['update_plugins'] = (object) [
+    'last_checked' => time(),
+    'response' => ['my-plugin/my-plugin.php' => (object) ['new_version' => '2.0.0'], 'other/other.php' => (object) ['new_version' => '9.9']],
+    'no_update' => ['third/third.php' => (object) ['new_version' => '1.0']],
+    'checked' => ['my-plugin/my-plugin.php' => '1.0.0', 'other/other.php' => '1.0'],
+  ];
+  $fr->forceRecheck();
+  $t = $GLOBALS['TRANSIENTS']['update_plugins'];
+  chk('our release cache is cleared', !is_array(get_site_transient('wpu_release_' . md5('my-plugin/my-plugin.php|bitbucket.org'))));
+  chk('WordPress will re-ask (last_checked zeroed)', $t->last_checked === 0);
+  chk('our stale entry is dropped', !isset($t->response['my-plugin/my-plugin.php']) && !isset($t->checked['my-plugin/my-plugin.php']));
+  chk('other plugins keep their update info', isset($t->response['other/other.php']) && isset($t->no_update['third/third.php']));
+  reset_state();
+  $GLOBALS['HTTP'] = fn($u, $a) => bb_listing([]);
+  register()->forceRecheck();
+  chk('no transient yet -> no fatal', true);
+
   echo "== credential verification\n";
   reset_state();
   $bb = new BitbucketDownloads('acme/my-plugin');

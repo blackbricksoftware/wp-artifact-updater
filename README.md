@@ -184,6 +184,29 @@ anyone remembers configuring them.
 sent as `Bearer <token>`. The `x-token-auth:<token>` form is for git over HTTPS
 and the REST API rejects it with a 401 (verified against a live repository).
 
+## Forcing a re-check
+
+Two caches sit between a published release and the Plugins screen: ours (6
+hours) and WordPress's own update transient (it re-asks at most twice a day).
+Clearing either one alone achieves nothing — ours gets refilled from a check
+WordPress won't run yet, and WordPress's gets refilled from our stale answer.
+`forceRecheck()` clears both:
+
+```php
+$updater->forceRecheck();   // then wp_update_plugins() really asks the host
+```
+
+It drops our cached release, removes **this plugin's** entries from the update
+transient, and resets `last_checked` so core's twice-a-day gate reopens. It
+deliberately does not delete the whole `update_plugins` transient: that would
+throw away what the site knows about every other plugin's updates, and keeping
+our own entries around would let an "update available" outlive the credential
+that found it.
+
+Call it from a "check for updates now" control, and whenever the credential
+changes — a `no release found` cached against the old credential otherwise makes
+a good new one look broken too.
+
 ## How it behaves
 
 - **Cached.** The release lookup is cached in a site transient (6h by default;
@@ -227,11 +250,13 @@ Tag a throwaway patch release and watch it appear:
 
 ```bash
 wp eval 'delete_site_transient("wpu_release_" . md5(plugin_basename(WP_PLUGIN_DIR . "/my-plugin/my-plugin.php") . "|bitbucket.org"));'
+wp eval 'wp_update_plugins();'
 wp plugin list --name=my-plugin --fields=name,version,update
 ```
 
-Clearing the transient is the quickest way to force a fresh check; otherwise
-wait out the TTL.
+Both lines are needed: the first clears our cache, and the second only does
+anything once WordPress's own twelve-hour gate has passed — which is why a
+plugin exposing `forceRecheck()` behind a button is worth the ten lines.
 
 ## Licence
 

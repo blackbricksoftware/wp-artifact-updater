@@ -1,5 +1,9 @@
 # Changelog
 
+# v1.3.0 (2026-09-22)
+- **`flush()`** — forget the cached release so the next check really asks the host. WordPress asks at most twice a day and we answer from a six-hour cache, so a release published minutes ago can be invisible with nothing wrong anywhere. A consumer offering a "check now" button, or reacting to a credential being changed, needs this or it just re-reads the stale answer
+- **`forceRecheck()`** — the whole "check now" dance in one call: clear our cached release, drop this plugin's entries from WordPress's update transient, and zero `last_checked` so `wp_update_plugins()` actually re-runs. Clearing either cache alone does nothing useful — ours is re-read from WordPress's, and WordPress's is refilled from ours. It is deliberately **not** `delete_site_transient('update_plugins')`, which every consumer writes first and which throws away what the site knows about every *other* plugin's updates; dropping only our own entries also stops a stale "update available" surviving a credential that has since been revoked
+
 # v1.2.0 (2026-09-22)
 - **Fixed: the Plugins screen showed no "Enable auto-updates" link.** WordPress only offers that toggle for plugins it considers updatable, and it decides that from the update transient: `WP_Plugins_List_Table` sets `update-supported` only for plugins present in `response` OR `no_update`. Returning `false` from the `update_plugins_{$hostname}` filter when a site was already current put the plugin in neither list (`wp-includes/update.php`: `if ( ! $update ) { continue; }`), so an up-to-date plugin looked like one that could never be updated — and auto-updates could not be switched on at all. The release is now always reported; core compares versions itself and files it as `response` or `no_update`. The pre-5.8 path does that placement itself, since nothing else will
 
