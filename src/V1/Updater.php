@@ -148,8 +148,15 @@ final class Updater {
       return $update;
     }
 
-    $installed = !empty($pluginData['Version']) ? (string) $pluginData['Version'] : $this->installedVersion();
-    $release = $this->newerRelease($installed);
+    // Return the release even when it is NOT newer. Core compares versions
+    // itself (update.php: "if version_compare(new_version, Version, '>')
+    // response, else no_update") — and the no_update entry is what makes
+    // WordPress consider the plugin updatable at all: without it the Plugins
+    // screen shows no "Enable auto-updates" link, because
+    // WP_Plugins_List_Table only sets update-supported for plugins present in
+    // one of those two lists. Returning false here meant a plugin that was up
+    // to date looked like one that could never be updated.
+    $release = $this->latestRelease();
 
     return $release === null ? $update : [
       'slug' => $this->slug,
@@ -173,12 +180,20 @@ final class Updater {
       return $transient;
     }
 
-    $release = $this->newerRelease($this->installedVersion());
+    $release = $this->latestRelease();
     if ($release === null) {
       return $transient;
     }
 
-    $transient->response[$this->basename] = (object) [
+    // Pre-5.8 there is no core placement logic for us, so do it here: newer
+    // goes in response, anything else in no_update — which is what keeps the
+    // auto-updates toggle visible on an up-to-date site.
+    $newer = version_compare(self::normalize($release['version']), self::normalize($this->installedVersion()), '>');
+    if (!$newer && !isset($transient->no_update)) {
+      $transient->no_update = [];
+    }
+
+    $entry = (object) [
       'id' => $this->source->updateHost() . '/' . $this->slug,
       'slug' => $this->slug,
       'plugin' => $this->basename,
@@ -186,6 +201,13 @@ final class Updater {
       'url' => $this->source->homepage(),
       'package' => $release['url'],
     ];
+
+    if ($newer) {
+      $transient->response[$this->basename] = $entry;
+    }
+    else {
+      $transient->no_update[$this->basename] = $entry;
+    }
 
     return $transient;
   }
@@ -255,19 +277,6 @@ final class Updater {
   }
 
   // --- internals ----------------------------------------------------------------
-
-  /** The newest release, if it is newer than $installed. */
-  private function newerRelease(string $installed): ?array
-  {
-    $release = $this->latestRelease();
-    if ($release === null) {
-      return null;
-    }
-
-    return version_compare(self::normalize($release['version']), self::normalize($installed), '>')
-      ? $release
-      : null;
-  }
 
   /**
    * The newest release, cached.

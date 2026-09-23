@@ -84,11 +84,39 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1 {
   $offer = $u->filterUpdate(false, ['Version' => '1.0.0'], 'my-plugin/my-plugin.php');
   chk('newer release is offered', is_array($offer) && $offer['version'] === '2.0.0');
   chk('credential sent as a header, verbatim', ($GLOBALS['REQUESTS'][0]['args']['headers']['Authorization'] ?? '') === 'Bearer tok');
-  chk('same version -> nothing', $u->filterUpdate(false, ['Version' => '2.0.0'], 'my-plugin/my-plugin.php') === false);
-  chk('newer installed -> no downgrade', $u->filterUpdate(false, ['Version' => '3.0.0'], 'my-plugin/my-plugin.php') === false);
+  // Core decides response-vs-no_update from the version; what matters is that
+  // we always hand it the release, or the Plugins screen hides the
+  // auto-updates toggle entirely (update-supported is only set for plugins
+  // present in response or no_update).
+  $same = $u->filterUpdate(false, ['Version' => '2.0.0'], 'my-plugin/my-plugin.php');
+  chk('same version -> still reports the release (so updates stay supported)', is_array($same) && $same['version'] === '2.0.0');
+  $older = $u->filterUpdate(false, ['Version' => '3.0.0'], 'my-plugin/my-plugin.php');
+  chk('newer installed -> reports release, core files it as no_update', is_array($older) && $older['version'] === '2.0.0');
   chk('another plugin -> untouched', $u->filterUpdate(false, ['Version' => '0.1'], 'other/other.php') === false);
   chk('one HTTP call for four checks (cached)', count($GLOBALS['REQUESTS']) === 1);
-  chk('a "v" prefix does not cause a phantom update', $u->filterUpdate(false, ['Version' => 'v2.0.0'], 'my-plugin/my-plugin.php') === false);
+  chk('a "v" prefix does not cause a phantom update', (function () use ($u) {
+    $r = $u->filterUpdate(false, ['Version' => 'v2.0.0'], 'my-plugin/my-plugin.php');
+    // Same version either way: core compares 2.0.0 to v2.0.0 and files it as
+    // no_update. What we must not do is claim a DIFFERENT version.
+    return is_array($r) && $r['version'] === '2.0.0';
+  })());
+
+  echo "== legacy transient placement (WP < 5.8)\n";
+  reset_state();
+  $GLOBALS['WP_VERSION'] = '5.7';
+  $GLOBALS['HTTP'] = fn($u2, $a) => bb_listing(['my-plugin-v2.0.0.zip']);
+  $legacy = register();
+  $GLOBALS['HEADERS'] = ['Name' => 'My Plugin', 'Version' => '1.0.0', 'Author' => 'A', 'Description' => 'd'];
+  $t = $legacy->filterLegacyTransient((object) ['response' => [], 'no_update' => []]);
+  chk('newer -> response', isset($t->response['my-plugin/my-plugin.php']));
+  reset_state();
+  $GLOBALS['WP_VERSION'] = '5.7';
+  $GLOBALS['HTTP'] = fn($u2, $a) => bb_listing(['my-plugin-v2.0.0.zip']);
+  // Distinct plugin_file: pluginHeaders() caches per path within a process.
+  $GLOBALS['HEADERS'] = ['Name' => 'My Plugin', 'Version' => '2.0.0', 'Author' => 'A', 'Description' => 'd'];
+  $legacy = register(['plugin_file' => '/plugins/my-plugin/uptodate.php']);
+  $t = $legacy->filterLegacyTransient((object) ['response' => [], 'no_update' => []]);
+  chk('up to date -> no_update, not response', isset($t->no_update['my-plugin/my-plugin.php']) && !isset($t->response['my-plugin/my-plugin.php']));
 
   echo "== hooks and the off switch\n";
   reset_state();
