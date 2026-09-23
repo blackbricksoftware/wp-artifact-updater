@@ -165,6 +165,25 @@ A Bitbucket pipeline doing all three:
 - (cd dist && zip -r "../my-plugin-${BITBUCKET_TAG}.zip" my-plugin)
 ```
 
+## Checking a credential
+
+A bad credential fails silently — no release is found, which looks exactly like
+being up to date. So verify it rather than waiting to find out:
+
+```php
+$result = Updater::verify(new BitbucketDownloads('acme/my-plugin'), $header);
+// ['ok' => false, 'status' => 401, 'message' => 'Bitbucket rejected the credential (401). …']
+```
+
+One cheap request, never throws, and `status === 0` means the host could not be
+reached rather than the credential being wrong. Worth calling when a credential
+is saved, and from a "test this token" button — tokens get revoked long after
+anyone remembers configuring them.
+
+**Bitbucket token form:** paste a repository access token **on its own**; it is
+sent as `Bearer <token>`. The `x-token-auth:<token>` form is for git over HTTPS
+and the REST API rejects it with a 401 (verified against a live repository).
+
 ## How it behaves
 
 - **Cached.** The release lookup is cached in a site transient (6h by default;

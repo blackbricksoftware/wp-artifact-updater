@@ -102,6 +102,20 @@ final class Updater {
     return $updater;
   }
 
+  /**
+   * Check a credential against its source, without registering anything.
+   *
+   * For consumers that want a "test this token" button, and for validating a
+   * credential at the moment it is entered rather than discovering months later
+   * that updates quietly stopped. Makes one cheap request and never throws.
+   *
+   * @return array{ok: bool, status: int, message: string}
+   */
+  public static function verify(Source $source, string $authorization): array
+  {
+    return $source->verifyCredential(trim($authorization));
+  }
+
   private function addHooks(): void
   {
     // WP 5.8+ asks only about plugins whose Update URI matches this host, so we

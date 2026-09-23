@@ -1,5 +1,9 @@
 # Changelog
 
+# v1.1.0 (2026-09-22)
+- **Credentials can be verified**, because the failure they cause is silent: a wrong, revoked or expired credential just means no release is ever found, which is indistinguishable from "you are up to date". `Updater::verify($source, $authorization)` makes one cheap request and returns `['ok', 'status', 'message']`, distinguishing a rejected credential from a host that did not answer — the remedies differ. Intended for validating a credential as it is entered, and for a "check this token" button later, since a token that worked in January can be revoked in June with nothing to show for it
+- The Bitbucket verdicts name the fix rather than the symptom: 401 points at the **x-token-auth trap** (that form is for git over HTTPS; the REST API wants `Bearer <token>` — confirmed against a live repository, where Bearer returns 200 and `Basic base64("x-token-auth:<token>")` returns 401), 403 names the `repository` read scope, 404 names the repository it looked for
+
 # v1.0.1 (2026-09-22)
 - **Namespace renamed** `BlackBrickSoftware\WpUpdater` → `BlackBrickSoftware\WpArtifactUpdater`, matching the package name. Strictly a breaking change for anyone who required v1.0.0 — done immediately, while the only consumer is our own, rather than carried as a mismatch forever.
 

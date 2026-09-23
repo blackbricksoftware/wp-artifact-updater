@@ -51,6 +51,23 @@ interface Source {
   public function requiresAuthorization(): bool;
 
   /**
+   * Does this credential actually authenticate?
+   *
+   * Exists because the failure it catches is silent: a wrong, revoked or
+   * expired credential simply means no release is ever found, which looks
+   * exactly like "you are up to date". Callers can use this to validate a
+   * credential when it is entered, and to check it on demand later — a token
+   * that worked in January can be revoked in June without anyone noticing.
+   *
+   * Must not throw, and must distinguish "the credential is wrong" from "the
+   * host did not answer", because the remedies are different.
+   *
+   * @return array{ok: bool, status: int, message: string} status is the HTTP
+   *         code, or 0 when the request itself failed.
+   */
+  public function verifyCredential(string $authorization): array;
+
+  /**
    * Turn a release URL into one WordPress can download, resolving any
    * authenticated redirect first.
    *

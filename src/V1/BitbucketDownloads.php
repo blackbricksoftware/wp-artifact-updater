@@ -108,6 +108,62 @@ final class BitbucketDownloads implements Source {
   }
 
   /**
+   * Ask Bitbucket for one download entry and report what came back.
+   *
+   * NOTE ON TOKEN FORM: a repository access token goes in as
+   * `Bearer <token>`. The `x-token-auth:<token>` form is for git over HTTPS,
+   * NOT the REST API — verified against a live repository, where Bearer
+   * returns 200 and Basic base64("x-token-auth:<token>") returns 401.
+   */
+  public function verifyCredential(string $authorization): array
+  {
+    if ($this->private && $authorization === '') {
+      return ['ok' => false, 'status' => 0, 'message' => 'No credential is configured for a private repository.'];
+    }
+
+    $response = wp_safe_remote_get(
+      self::API . $this->repo . '/downloads?pagelen=1',
+      [
+        'timeout' => 15,
+        'headers' => $authorization === '' ? [] : ['Authorization' => $authorization],
+      ]
+    );
+
+    return self::describe($response, $this->repo);
+  }
+
+  /**
+   * Turn a response into a verdict a human can act on. Public and static so it
+   * can be tested without the network.
+   *
+   * @param array|\WP_Error $response
+   * @return array{ok: bool, status: int, message: string}
+   */
+  public static function describe($response, string $repo): array
+  {
+    if (is_wp_error($response)) {
+      return ['ok' => false, 'status' => 0, 'message' => 'Could not reach Bitbucket: ' . $response->get_error_message()];
+    }
+
+    $status = (int) wp_remote_retrieve_response_code($response);
+
+    if ($status === 200) {
+      return ['ok' => true, 'status' => 200, 'message' => 'Authenticated; the repository Downloads are readable.'];
+    }
+    if ($status === 401) {
+      return ['ok' => false, 'status' => 401, 'message' => 'Bitbucket rejected the credential (401). If this is a repository access token, paste the token on its own — the x-token-auth: form is for git, not the API.'];
+    }
+    if ($status === 403) {
+      return ['ok' => false, 'status' => 403, 'message' => 'Authenticated, but not allowed to read this repository (403). The token needs "repository" read on ' . $repo . '.'];
+    }
+    if ($status === 404) {
+      return ['ok' => false, 'status' => 404, 'message' => 'Repository not found (404): ' . $repo . '. Check the workspace/repository name, or the token may not see it.'];
+    }
+
+    return ['ok' => false, 'status' => $status, 'message' => 'Unexpected response from Bitbucket (HTTP ' . $status . ').'];
+  }
+
+  /**
    * Bitbucket answers a Downloads href with a 302 to a signed storage URL. Ask
    * for the redirect without following it, then hand back the signed URL, which
    * carries its own authentication — so our credential never reaches the

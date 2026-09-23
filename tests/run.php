@@ -11,7 +11,8 @@ namespace {
   define('MINUTE_IN_SECONDS', 60);
   define('ABSPATH', '/tmp/');
 
-  class WP_Error { public function __construct(public string $code = '', public string $message = '') {} }
+  class WP_Error { public function __construct(public string $code = '', public string $message = '') {}
+    public function get_error_message() { return $this->message; } }
   function is_wp_error($thing) { return $thing instanceof WP_Error; }
   function wp_remote_retrieve_response_code($r) { return $r['response']['code'] ?? 0; }
   function wp_remote_retrieve_body($r) { return $r['body'] ?? ''; }
@@ -157,6 +158,32 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1 {
 
   reset_state();
   chk('private GitHub with no credential -> inert', register(['source' => new GitHubReleases('acme/my-plugin', true), 'authorization' => static fn(): string => '']) === null);
+
+
+  echo "== credential verification\n";
+  reset_state();
+  $bb = new BitbucketDownloads('acme/my-plugin');
+  chk('200 -> ok', BitbucketDownloads::describe(['response' => ['code' => 200], 'body' => '{}'], 'acme/my-plugin')['ok'] === true);
+  $r401 = BitbucketDownloads::describe(['response' => ['code' => 401], 'body' => ''], 'acme/my-plugin');
+  chk('401 -> not ok, and explains the x-token-auth trap', $r401['ok'] === false && strpos($r401['message'], 'x-token-auth') !== false);
+  $r403 = BitbucketDownloads::describe(['response' => ['code' => 403], 'body' => ''], 'acme/my-plugin');
+  chk('403 -> names the scope needed', $r403['ok'] === false && strpos($r403['message'], 'repository') !== false);
+  chk('404 -> names the repo', strpos(BitbucketDownloads::describe(['response' => ['code' => 404], 'body' => ''], 'acme/my-plugin')['message'], 'acme/my-plugin') !== false);
+  $rerr = BitbucketDownloads::describe(new \WP_Error('http', 'dns failure'), 'acme/my-plugin');
+  chk('transport failure distinguished from a bad credential', $rerr['ok'] === false && $rerr['status'] === 0);
+  chk('private source with no credential fails without a request', (function () use ($bb) {
+    $GLOBALS['REQUESTS'] = [];
+    $r = Updater::verify($bb, '');
+    return $r['ok'] === false && $GLOBALS['REQUESTS'] === [];
+  })());
+  reset_state();
+  $GLOBALS['HTTP'] = fn($u, $a) => ['response' => ['code' => 200], 'body' => '{"values":[]}'];
+  $ok = Updater::verify($bb, 'Bearer tok');
+  chk('verify() sends the header and reports ok', $ok['ok'] === true && ($GLOBALS['REQUESTS'][0]['args']['headers']['Authorization'] ?? '') === 'Bearer tok');
+  chk('verify() asks for one row, not the whole listing', strpos($GLOBALS['REQUESTS'][0]['url'], 'pagelen=1') !== false);
+  reset_state();
+  $GLOBALS['HTTP'] = fn($u, $a) => ['response' => ['code' => 200], 'body' => '{"tag_name":"v1","assets":[]}'];
+  chk('public GitHub verifies with no credential', Updater::verify(new GitHubReleases('acme/my-plugin'), '')['ok'] === true);
 
   echo "\n" . ($fails ? "$fails FAILED" : 'ALL PASS') . "\n";
   exit($fails ? 1 : 0);

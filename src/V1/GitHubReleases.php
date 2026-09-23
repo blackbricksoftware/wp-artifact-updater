@@ -127,6 +127,41 @@ final class GitHubReleases implements Source {
     return null;
   }
 
+  public function verifyCredential(string $authorization): array
+  {
+    if ($this->private && $authorization === '') {
+      return ['ok' => false, 'status' => 0, 'message' => 'No credential is configured for a private repository.'];
+    }
+
+    $response = wp_safe_remote_get(self::API . $this->repo . '/releases/latest', [
+      'timeout' => 15,
+      'headers' => array_filter([
+        'Accept' => 'application/vnd.github+json',
+        'Authorization' => $authorization === '' ? null : $authorization,
+      ]),
+    ]);
+
+    if (is_wp_error($response)) {
+      return ['ok' => false, 'status' => 0, 'message' => 'Could not reach GitHub: ' . $response->get_error_message()];
+    }
+
+    $status = (int) wp_remote_retrieve_response_code($response);
+    if ($status === 200) {
+      return ['ok' => true, 'status' => 200, 'message' => 'Authenticated; the latest release is readable.'];
+    }
+    if ($status === 401) {
+      return ['ok' => false, 'status' => 401, 'message' => 'GitHub rejected the credential (401).'];
+    }
+    if ($status === 403) {
+      return ['ok' => false, 'status' => 403, 'message' => 'Forbidden (403) — rate limited, or the token cannot read ' . $this->repo . '.'];
+    }
+    if ($status === 404) {
+      return ['ok' => false, 'status' => 404, 'message' => 'No release found, or the repository is not visible (404): ' . $this->repo . '.'];
+    }
+
+    return ['ok' => false, 'status' => $status, 'message' => 'Unexpected response from GitHub (HTTP ' . $status . ').'];
+  }
+
   /**
    * Public assets download straight from their browser URL, so there is nothing
    * to resolve. A private asset's API URL answers with a 302 to signed storage;
