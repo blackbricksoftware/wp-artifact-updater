@@ -1,0 +1,25 @@
+{
+    "name": "blackbricksoftware/wp-plugin-updater",
+    "description": "WordPress plugin updates from a private release artifact (Bitbucket Downloads), for plugins distributed outside wordpress.org.",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "BlackBrickSoftware\\WpUpdater\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "David Hayes",
+            "email": "david@blackbrick.software"
+        }
+    ],
+    "require": {
+        "php": ">=8.0"
+    },
+    "config": {
+        "platform": {
+            "php": "8.0.30"
+        }
+    }
+}
