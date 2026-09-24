@@ -118,6 +118,39 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1 {
   $t = $legacy->filterLegacyTransient((object) ['response' => [], 'no_update' => []]);
   chk('up to date -> no_update, not response', isset($t->no_update['my-plugin/my-plugin.php']) && !isset($t->response['my-plugin/my-plugin.php']));
 
+  echo "== what core actually receives (v-prefixed tags)\n";
+  // These assert on the ENTRY handed to WordPress, not on our internal
+  // newer/not-newer decision — that decision was already right while the bug
+  // was present. Core re-compares what we give it: wp_update_plugins() copies
+  // `version` to `new_version` and runs version_compare() itself, so a raw
+  // "v2.0.0" loses to an installed "1.0.0" and the update silently never
+  // appears. Only an asset whose FILENAME carries no version reaches this path
+  // (the tag becomes the version), which is why our own Bitbucket releases
+  // never tripped it.
+  reset_state();
+  $GLOBALS['HTTP'] = fn($u, $a) => gh_release('v2.0.0', ['my_plugin.zip']);
+  $gh = register(['source' => new GitHubReleases('acme/my-plugin'), 'artifact' => '/^my_plugin\.zip$/', 'plugin_file' => '/plugins/my-plugin/gh.php']);
+  $entry = $gh->filterUpdate(false, ['Version' => '1.0.0'], 'my-plugin/my-plugin.php');
+  chk('tag fallback reaches core without its "v"', is_array($entry) && $entry['version'] === '2.0.0');
+  chk("core's own comparison now offers it", version_compare($entry['version'] ?? '', '1.0.0', '>') === true);
+  chk('no double-offer against the installed version', version_compare($entry['version'] ?? '', '2.0.0', '>') === false);
+  chk('the modal shows the string core compares', $gh->filterPluginsApi(null, 'plugin_information', (object) ['slug' => 'my-plugin'])->version === '2.0.0');
+  reset_state();
+  $GLOBALS['WP_VERSION'] = '5.7';
+  $GLOBALS['HTTP'] = fn($u, $a) => gh_release('v2.0.0', ['my_plugin.zip']);
+  $GLOBALS['HEADERS'] = ['Name' => 'My Plugin', 'Version' => '1.0.0', 'Author' => 'A', 'Description' => 'd'];
+  $ghLegacy = register(['source' => new GitHubReleases('acme/my-plugin'), 'artifact' => '/^my_plugin\.zip$/', 'plugin_file' => '/plugins/my-plugin/ghlegacy.php']);
+  $t = $ghLegacy->filterLegacyTransient((object) ['response' => [], 'no_update' => []]);
+  chk('pre-5.8 transient carries a normalised new_version', ($t->response['my-plugin/my-plugin.php']->new_version ?? '') === '2.0.0');
+  // A release cached by an older build holds the raw tag: correct it on read
+  // rather than serving it raw until the TTL expires.
+  reset_state();
+  $GLOBALS['HTTP'] = fn($u, $a) => gh_release('v9.9.9', ['my_plugin.zip']);
+  $stale = register(['source' => new GitHubReleases('acme/my-plugin'), 'artifact' => '/^my_plugin\.zip$/', 'plugin_file' => '/plugins/my-plugin/stale.php']);
+  $stale->filterUpdate(false, ['Version' => '1.0.0'], 'my-plugin/my-plugin.php');
+  foreach (array_keys($GLOBALS['TRANSIENTS']) as $k) { $GLOBALS['TRANSIENTS'][$k] = ['version' => 'v3.0.0', 'url' => 'https://example.test/p.zip']; }
+  chk('a stale cached "v" version is corrected on read', ($stale->filterUpdate(false, ['Version' => '1.0.0'], 'my-plugin/my-plugin.php')['version'] ?? '') === '3.0.0');
+
   echo "== hooks and the off switch\n";
   reset_state();
   $GLOBALS['HTTP'] = fn($u, $a) => bb_listing([]);

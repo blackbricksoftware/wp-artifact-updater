@@ -188,7 +188,9 @@ final class Updater {
     // Pre-5.8 there is no core placement logic for us, so do it here: newer
     // goes in response, anything else in no_update — which is what keeps the
     // auto-updates toggle visible on an up-to-date site.
-    $newer = version_compare(self::normalize($release['version']), self::normalize($this->installedVersion()), '>');
+    // $release['version'] arrives normalised from latestRelease(); the installed
+    // header is whatever the plugin author wrote, so normalise that side here.
+    $newer = version_compare($release['version'], self::normalize($this->installedVersion()), '>');
     if (!$newer && !isset($transient->no_update)) {
       $transient->no_update = [];
     }
@@ -266,7 +268,11 @@ final class Updater {
     return (object) [
       'name' => $headers['Name'] !== '' ? $headers['Name'] : $this->slug,
       'slug' => $this->slug,
-      'version' => $release['version'] ?? $headers['Version'],
+      // Normalised, like everything else we hand WordPress: the modal should
+      // show the version core will compare, not the tag the host happens to
+      // spell with a "v". (The release is already normalised by
+      // latestRelease(); the header fallback can carry a prefix of its own.)
+      'version' => $release['version'] ?? self::normalize($headers['Version']),
       'author' => $headers['Author'],
       'homepage' => $this->source->homepage(),
       'download_link' => $release['url'] ?? '',
@@ -291,7 +297,7 @@ final class Updater {
 
     $cached = get_site_transient($key);
     if (is_array($cached)) {
-      return $cached['version'] === '' ? null : $cached;
+      return $cached['version'] === '' ? null : self::withNormalizedVersion($cached);
     }
 
     $release = $this->source->latestRelease($this->credential(), $this->artifact);
@@ -300,6 +306,37 @@ final class Updater {
       $release ?? ['version' => '', 'url' => ''],
       $release ? $this->ttl : 15 * MINUTE_IN_SECONDS
     );
+
+    return $release === null ? null : self::withNormalizedVersion($release);
+  }
+
+  /**
+   * The release with its version in the form WordPress will compare.
+   *
+   * THE ONE PLACE THIS HAPPENS, and it is deliberately here rather than in the
+   * sources: a source reports what its host said (`GitHubReleases` hands back
+   * `tag_name` verbatim when the filename carries no version), and this is the
+   * boundary where that becomes a value core will do arithmetic on.
+   *
+   * Normalising only our own comparison is not enough, and looks like a fix
+   * while changing nothing: core re-compares what we hand it. For WP 5.8+,
+   * `wp_update_plugins()` copies our `version` to `new_version` and then runs
+   * `version_compare($update->new_version, $plugin_data['Version'], '>')`
+   * itself (wp-includes/update.php), so a `v`-prefixed tag reaching core as
+   * "v1.0.4" loses to an installed "1.0.3" — PHP reads the `v` as a
+   * pre-release-ish string part. The update then never appears, silently, while
+   * this library believes it offered one. Normalising on the way out fixes the
+   * transient path and the "View details" version at the same time.
+   *
+   * Applied on the cache read too, so a release cached by an older build is
+   * corrected rather than served raw until its TTL expires.
+   *
+   * @param array{version: string, url: string} $release
+   * @return array{version: string, url: string}
+   */
+  private static function withNormalizedVersion(array $release): array
+  {
+    $release['version'] = self::normalize((string) $release['version']);
 
     return $release;
   }
