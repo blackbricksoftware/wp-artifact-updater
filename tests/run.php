@@ -7,6 +7,25 @@
  */
 
 namespace {
+  // NEVER over HTTP. This file ships inside a consuming plugin's vendor/ directory,
+  // so it is web-reachable on most hosts — and before v1.3.2 an anonymous GET to it
+  // on a live site ran this suite to completion and returned 200. Nothing in the
+  // output is sensitive, but unreviewed code that executes on an anonymous request
+  // should not be lying around, and a suite that later grew something touching the
+  // real environment would inherit that exposure without anyone noticing. 404 rather
+  // than 403, so a probe learns nothing about what is or is not here.
+  //
+  // This MUST be the first statement in this block. The file uses bracketed
+  // namespace syntax, which permits no code outside the braces except declare() —
+  // put this above `namespace {` and it is a parse error.
+  //
+  // The .gitattributes export-ignore keeps this file out of release archives; this
+  // guard covers the other path, a --prefer-source install that clones instead.
+  if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+  }
+
   define('HOUR_IN_SECONDS', 3600);
   define('MINUTE_IN_SECONDS', 60);
   define('ABSPATH', '/tmp/');

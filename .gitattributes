@@ -1,0 +1,20 @@
+# What ships to consumers, versus what stays in the repository.
+#
+# This library is installed into a WordPress plugin's vendor/ directory, which is
+# web-reachable on most hosts. Until v1.3.2 it shipped tests/run.php, and an
+# anonymous GET to it on a live site executed the whole suite and returned 200.
+# Archives are what Composer installs from — GitHub's and GitLab's zipball
+# endpoints both honour export-ignore — so pruning here is what keeps every
+# consumer clean on its next `composer update`, including consumers nobody has
+# written yet. Doing it in each consumer's build script instead would be a thing
+# to remember forever, in every repo.
+#
+# NOTE export-ignore applies to ARCHIVES, not to clones: `composer install
+# --prefer-source` clones and would still fetch tests/. That is why tests/run.php
+# ALSO refuses to run outside the CLI. The two together cover both paths; neither
+# covers both alone.
+/tests          export-ignore
+/README.md      export-ignore
+/CHANGELOG.md   export-ignore
+/.gitignore     export-ignore
+/.gitattributes export-ignore
