@@ -215,8 +215,20 @@ final class Updater {
   }
 
   /**
-   * `upgrader_pre_download` — let the source resolve its own authenticated
-   * redirect, so a credential is never sent to third-party storage.
+   * `upgrader_pre_download` — download our own package, so a credential is
+   * never sent to third-party storage.
+   *
+   * A source that implements {@see DirectDownload} downloads the package
+   * itself (GitHub, whose asset API may answer with the file rather than a
+   * redirect). Any other source resolves its authenticated redirect to a URL
+   * that needs no credential, and WordPress's download_url() fetches that.
+   *
+   * A FAILED DOWNLOAD FORGETS THE CACHED RELEASE ({@see forceRecheck()}). What
+   * WordPress tried to download came from that cache, and the usual reason it
+   * no longer works is that it is out of date — a GitHub release whose zip was
+   * replaced has a new asset id, so the cached URL is a 404 — or the credential
+   * changed. Without this the same dead URL is retried, manually and by
+   * auto-updates, until both caches expire, which can be most of a day.
    *
    * @param mixed  $reply   false to let WordPress download normally.
    * @param string $package Package URL.
@@ -228,23 +240,32 @@ final class Updater {
       return $reply;
     }
 
-    $resolved = $this->source->resolveDownloadUrl((string) $package, $this->credential());
-    if ($resolved === null) {
-      return new \WP_Error(
-        'wp_updater_download_unresolved',
-        sprintf(
-          /* translators: %s: plugin name. */
-          __('Could not resolve the download for %s. Check its update credential.', 'wp-artifact-updater'),
-          $this->slug
-        )
-      );
-    }
-
     if (!function_exists('download_url')) {
       require_once ABSPATH . 'wp-admin/includes/file.php';
     }
 
-    return download_url($resolved);
+    if ($this->source instanceof DirectDownload) {
+      $result = $this->source->download((string) $package, $this->credential());
+    }
+    else {
+      $resolved = $this->source->resolveDownloadUrl((string) $package, $this->credential());
+      $result = $resolved === null
+        ? new \WP_Error(
+          'wp_updater_download_unresolved',
+          sprintf(
+            /* translators: %s: plugin name. */
+            __('Could not resolve the download for %s. Check its update credential.', 'wp-artifact-updater'),
+            $this->slug
+          )
+        )
+        : download_url($resolved);
+    }
+
+    if (is_wp_error($result)) {
+      $this->forceRecheck();
+    }
+
+    return $result;
   }
 
   /**

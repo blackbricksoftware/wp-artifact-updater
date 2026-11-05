@@ -138,6 +138,14 @@ workflow publishing a fixed filename works:
 'artifact' => '/^my-plugin\.zip$/',   // version comes from the tag
 ```
 
+**Private assets** are downloaded through the API, with the credential, in one
+request that does not follow redirects. GitHub documents two answers to it, and
+both work: usually a redirect to a short-lived signed URL on its file storage,
+which is followed **without** the credential, and sometimes the file itself.
+(Up to v1.3.2 only the redirect worked.) A token needs read access to the
+repository's contents: for a fine-grained personal access token, **Contents:
+Read-only** on that one repository.
+
 ## What your pipeline must produce
 
 Three requirements, each of which fails silently if you get it wrong:
@@ -214,6 +222,13 @@ a good new one look broken too.
   on every admin page load.
 - **Quiet on failure.** An unreachable host or a bad credential means no update
   is offered. Sources never throw; an update check isn't worth a fatal.
+- **A failed download forgets the cache.** What WordPress tried to download
+  came from the cached release, and the usual reason it stops working is that
+  the cache is out of date: replacing a GitHub release's zip gives it a new
+  asset id, so the cached URL is a 404. The failure calls `forceRecheck()`, so
+  the next check asks the host again rather than retrying a dead URL until both
+  caches expire. The error says what the host answered, since a rejected
+  credential and a missing file are fixed differently.
 - **`Update URI` matters.** Besides routing the check, it stops wordpress.org
   pushing a same-slug plugin onto your sites. Set it even on WP 5.8+.
 - **Version comparison ignores a leading `v`.** `version_compare('v2.0.0',
@@ -227,7 +242,7 @@ the layout mirrors it:
 
 ```
 src/
-  V1/   Source.php  Updater.php  BitbucketDownloads.php  GitHubReleases.php
+  V1/   Source.php  DirectDownload.php  Updater.php  BitbucketDownloads.php  GitHubReleases.php
 ```
 
 PSR-4 maps `BlackBrickSoftware\WpArtifactUpdater\` to `src/`, so a breaking change is a
@@ -235,8 +250,17 @@ new `src/V2/` directory and nothing else: no autoload change, and V1 keeps
 working for plugins that haven't moved.
 
 Two plugins on one site can each ship their own copy of V1 in `vendor/` and the
-first one loaded wins — harmless, because it's the same code. Only an actual
-breaking change needs a new major, and then the two coexist.
+first one loaded wins. That is harmless because releases within V1 only add:
+`Source` never gains a method, and anything new is an optional extra interface
+(`DirectDownload`, in 1.4.0) that `Updater` checks for. So copies of different
+V1 releases work together whichever classes load from which copy, and an older
+copy simply behaves as it always did. Only an actual breaking change needs a new
+major, and then the two coexist.
+
+**Writing your own source:** implement `Source`. If your host can answer a
+download with the file itself, also implement `DirectDownload` and do the
+download there; otherwise `Updater` resolves redirects through
+`resolveDownloadUrl()` and lets WordPress fetch the result.
 
 If a plugin ever vendors *third-party* dependencies into its zip, prefix them at
 build time with [PHP-Scoper][scoper] — that's the general fix for WordPress's

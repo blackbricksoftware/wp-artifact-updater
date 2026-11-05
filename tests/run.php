@@ -45,11 +45,14 @@ namespace {
   function add_filter($hook, $cb, $p = 10, $n = 1) { $GLOBALS['HOOKS'][] = $hook; }
   function get_file_data($file, $fields, $ctx = '') { return $GLOBALS['HEADERS'] ?? ['Name' => 'My Plugin', 'Version' => '1.0.0', 'Author' => 'Acme', 'Description' => 'Does things.']; }
   function download_url($u) { $GLOBALS['DOWNLOADED'] = $u; return '/tmp/pkg.zip'; }
+  function wp_tempnam($f = '') { return tempnam(sys_get_temp_dir(), 'wpu'); }
+  function wp_delete_file($f) { $GLOBALS['DELETED'][] = $f; @unlink($f); }
   function __($s, $d = null) { return $s; }
 }
 
 namespace BlackBrickSoftware\WpArtifactUpdater\V1 {
   require __DIR__ . '/../src/V1/Source.php';
+  require __DIR__ . '/../src/V1/DirectDownload.php';
   require __DIR__ . '/../src/V1/Updater.php';
   require __DIR__ . '/../src/V1/BitbucketDownloads.php';
   require __DIR__ . '/../src/V1/GitHubReleases.php';
@@ -59,7 +62,7 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1 {
   function reset_state(): void {
     $GLOBALS['TRANSIENTS'] = []; $GLOBALS['REQUESTS'] = []; $GLOBALS['HOOKS'] = [];
     $GLOBALS['HEADERS'] = ['Name' => 'My Plugin', 'Version' => '1.0.0', 'Author' => 'Acme', 'Description' => 'Does things.'];
-    $GLOBALS['WP_VERSION'] = '6.4'; unset($GLOBALS['DOWNLOADED']);
+    $GLOBALS['WP_VERSION'] = '6.4'; unset($GLOBALS['DOWNLOADED']); $GLOBALS['DELETED'] = [];
   }
   function bb_listing(array $names): array {
     $values = [];
@@ -238,6 +241,81 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1 {
 
   reset_state();
   chk('private GitHub with no credential -> inert', register(['source' => new GitHubReleases('acme/my-plugin', true), 'authorization' => static fn(): string => '']) === null);
+
+  echo "== private GitHub: every answer the asset API may give\n";
+  // GitHub documents that a release asset's API URL answers with either a
+  // redirect to signed storage OR the file itself ("API clients should handle
+  // both a 200 or 302 response"). Up to v1.3.2 only the redirect worked: a 200
+  // became "Could not resolve the download … Check its update credential".
+  $ASSET = 'https://api.github.com/repos/acme/my-plugin/releases/assets/9';
+  $privGhRegister = fn() => register(['source' => new GitHubReleases('acme/my-plugin', true), 'artifact' => '/^my_plugin\.zip$/', 'authorization' => static fn(): string => 'Bearer ghtok', 'plugin_file' => '/plugins/my-plugin/ghdl.php']);
+  // A cached release and a WordPress update entry for this plugin, so we can see
+  // whether a failed download forgets them.
+  $seedCaches = function () {
+    $GLOBALS['TRANSIENTS']['wpu_release_' . md5('my-plugin/my-plugin.php|github.com')] = ['version' => '2.0.0', 'url' => 'https://api.github.com/repos/acme/my-plugin/releases/assets/9'];
+    $GLOBALS['TRANSIENTS']['update_plugins'] = (object) ['last_checked' => time(), 'response' => ['my-plugin/my-plugin.php' => (object) ['new_version' => '2.0.0']], 'no_update' => [], 'checked' => ['my-plugin/my-plugin.php' => '1.0.0']];
+  };
+  $cachesForgotten = fn() => !isset($GLOBALS['TRANSIENTS']['wpu_release_' . md5('my-plugin/my-plugin.php|github.com')])
+    && $GLOBALS['TRANSIENTS']['update_plugins']->last_checked === 0
+    && !isset($GLOBALS['TRANSIENTS']['update_plugins']->response['my-plugin/my-plugin.php']);
+
+  chk('GitHubReleases downloads its own assets', new GitHubReleases('acme/my-plugin', true) instanceof DirectDownload);
+  chk('BitbucketDownloads keeps the URL-resolving path', !(new BitbucketDownloads('acme/my-plugin') instanceof DirectDownload));
+
+  reset_state();
+  $GLOBALS['HTTP'] = function ($u, $a) { if (!empty($a['stream'])) { file_put_contents($a['filename'], 'PK-zip-bytes'); } return ['response' => ['code' => 200], 'headers' => [], 'body' => '']; };
+  $dl = $privGhRegister();
+  $path = $dl->preDownload(false, $ASSET);
+  chk('200 (the file itself) -> that file is the download', is_string($path) && is_file($path) && file_get_contents($path) === 'PK-zip-bytes');
+  chk('200 -> one request, nothing else fetched', count($GLOBALS['REQUESTS']) === 1 && !isset($GLOBALS['DOWNLOADED']));
+  chk('asked with the credential, octet-stream, no follow, streamed to a temp file', ($GLOBALS['REQUESTS'][0]['args']['headers']['Authorization'] ?? '') === 'Bearer ghtok'
+    && ($GLOBALS['REQUESTS'][0]['args']['headers']['Accept'] ?? '') === 'application/octet-stream'
+    && ($GLOBALS['REQUESTS'][0]['args']['redirection'] ?? null) === 0
+    && ($GLOBALS['REQUESTS'][0]['args']['stream'] ?? false) === true
+    && ($GLOBALS['REQUESTS'][0]['args']['filename'] ?? '') === $path);
+  if (is_string($path)) { @unlink($path); }
+
+  reset_state();
+  $GLOBALS['HTTP'] = function ($u, $a) { if (!empty($a['stream'])) { file_put_contents($a['filename'], ''); } return ['response' => ['code' => 302], 'headers' => ['location' => 'https://release-assets.githubusercontent.com/signed?sig=z'], 'body' => '']; };
+  $dl = $privGhRegister();
+  $path = $dl->preDownload(false, $ASSET);
+  chk('302 -> the signed URL is downloaded', $path === '/tmp/pkg.zip' && ($GLOBALS['DOWNLOADED'] ?? '') === 'https://release-assets.githubusercontent.com/signed?sig=z');
+  chk('302 -> the credential never reaches the storage host', count($GLOBALS['REQUESTS']) === 1 && strpos($GLOBALS['REQUESTS'][0]['url'], 'https://api.github.com/') === 0);
+  chk('302 -> the redirect body is not left behind', count($GLOBALS['DELETED']) === 1);
+
+  foreach ([404 => 'replaced or removed', 401 => 'rejected the credential', 403 => 'cannot read acme/my-plugin', 500 => 'HTTP 500'] as $code => $says) {
+    reset_state();
+    $GLOBALS['HTTP'] = function ($u, $a) use ($code) { if (!empty($a['stream'])) { file_put_contents($a['filename'], '{"message":"x"}'); } return ['response' => ['code' => $code], 'headers' => [], 'body' => '']; };
+    $dl = $privGhRegister();
+    $seedCaches();
+    $err = $dl->preDownload(false, $ASSET);
+    chk("$code -> WP_Error that says what happened", $err instanceof \WP_Error && $err->code === 'wp_updater_download_unresolved' && strpos($err->message, $says) !== false);
+    chk("$code -> the error body is not left behind", count($GLOBALS['DELETED']) === 1 && !is_file($GLOBALS['DELETED'][0]));
+    chk("$code -> the cached release is forgotten, so the next check asks again", $cachesForgotten());
+  }
+
+  reset_state();
+  $GLOBALS['HTTP'] = fn($u, $a) => new \WP_Error('http_request_failed', 'timed out');
+  $dl = $privGhRegister();
+  $seedCaches();
+  $err = $dl->preDownload(false, $ASSET);
+  chk('unreachable -> WP_Error naming the transport failure', $err instanceof \WP_Error && strpos($err->message, 'Could not reach GitHub') !== false && strpos($err->message, 'timed out') !== false);
+  chk('unreachable -> caches forgotten too', $cachesForgotten());
+
+  reset_state();
+  $GLOBALS['HTTP'] = fn($u, $a) => ['response' => ['code' => 302], 'headers' => [], 'body' => ''];
+  chk('302 with no Location -> WP_Error, not a broken install', $privGhRegister()->preDownload(false, $ASSET) instanceof \WP_Error);
+
+  echo "== a failed download forgets the cache on Bitbucket too\n";
+  reset_state();
+  $GLOBALS['HTTP'] = fn($u, $a) => ['response' => ['code' => 404], 'headers' => [], 'body' => ''];
+  $bbdl = register(['plugin_file' => '/plugins/my-plugin/bbdl.php']);
+  $GLOBALS['TRANSIENTS']['wpu_release_' . md5('my-plugin/my-plugin.php|bitbucket.org')] = ['version' => '2.0.0', 'url' => 'x'];
+  $GLOBALS['TRANSIENTS']['update_plugins'] = (object) ['last_checked' => time(), 'response' => ['my-plugin/my-plugin.php' => (object) ['new_version' => '2.0.0']], 'no_update' => [], 'checked' => []];
+  $err = $bbdl->preDownload(false, 'https://api.bitbucket.org/2.0/repositories/acme/my-plugin/downloads/my-plugin-v2.0.0.zip');
+  chk('unresolved Bitbucket download -> same WP_Error as before', $err instanceof \WP_Error && $err->code === 'wp_updater_download_unresolved');
+  chk('and the cached release is forgotten', !isset($GLOBALS['TRANSIENTS']['wpu_release_' . md5('my-plugin/my-plugin.php|bitbucket.org')]) && $GLOBALS['TRANSIENTS']['update_plugins']->last_checked === 0);
+  chk('Bitbucket still asks once, without streaming (unchanged path)', count($GLOBALS['REQUESTS']) === 1 && !isset($GLOBALS['REQUESTS'][0]['args']['stream']));
 
 
   echo "== flushing the release cache\n";

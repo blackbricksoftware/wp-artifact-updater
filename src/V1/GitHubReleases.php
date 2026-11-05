@@ -9,7 +9,7 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1;
  * artifact is attached to the release and this installs that asset — never the
  * source zipball, which has no `vendor/`.
  *
- * TWO DIFFERENCES FROM BITBUCKET, both handled here:
+ * THREE DIFFERENCES FROM BITBUCKET, all handled here:
  *
  *   1. The VERSION USUALLY LIVES IN THE TAG, not the filename. Plenty of
  *      workflows publish a fixed asset name (`my-plugin.zip`) for every
@@ -18,6 +18,11 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1;
  *      release's tag_name otherwise.
  *   2. PUBLIC REPOSITORIES NEED NO CREDENTIAL. Construct with $private = false
  *      and the updater will not switch itself off for want of one.
+ *   3. A PRIVATE ASSET MAY COME BACK AS THE FILE ITSELF. Its API URL usually
+ *      answers with a 302 to signed storage, but GitHub documents that it may
+ *      stream the file instead ("API clients should handle both a 200 or 302
+ *      response"). So this source downloads private assets itself
+ *      ({@see download()}) rather than only resolving a URL.
  *
  * A HAZARD NO UPDATER CAN FIX: WordPress installs into the zip's top-level
  * directory, and `zip -r plugin.zip .` produces an archive that has none — the
@@ -28,7 +33,7 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1;
  * README. GitHub workflows are likelier to trip on this than Bitbucket ones,
  * which is why it is noted here rather than in the other source.
  */
-final class GitHubReleases implements Source {
+final class GitHubReleases implements Source, DirectDownload {
 
   private const API = 'https://api.github.com/repos/';
 
@@ -163,9 +168,93 @@ final class GitHubReleases implements Source {
   }
 
   /**
-   * Public assets download straight from their browser URL, so there is nothing
-   * to resolve. A private asset's API URL answers with a 302 to signed storage;
-   * resolve that ourselves so the credential never reaches the storage host.
+   * Download a release asset. {@see Updater} uses this rather than
+   * resolveDownloadUrl(), so it is the path every update takes.
+   *
+   * Public assets download straight from their browser URL, with no credential:
+   * WordPress follows GitHub's redirect itself, exactly as before this method
+   * existed.
+   *
+   * A private asset is asked for ONCE, through the API with the credential and
+   * no redirect-following, and either answer GitHub documents is accepted:
+   *   - 200: GitHub streamed the file itself. That response IS the download.
+   *   - 3xx: a redirect to a signed, short-lived URL on separate storage. It is
+   *     followed WITHOUT the credential: the signature is the authentication,
+   *     and sending our header there would hand it to a third party.
+   * Anything else is a WP_Error naming the status, because the remedies differ:
+   * a 401 is the credential, a 404 usually a release whose file was replaced
+   * since this site last checked (a new upload gets a new asset id).
+   *
+   * @return string|\WP_Error
+   */
+  public function download(string $url, string $authorization)
+  {
+    if (!$this->private || $authorization === '') {
+      return download_url($url);
+    }
+
+    $file = wp_tempnam('release-asset');
+    $response = wp_safe_remote_get($url, [
+      'timeout' => 300,
+      'redirection' => 0,
+      'stream' => true,
+      'filename' => $file,
+      'headers' => [
+        'Authorization' => $authorization,
+        'Accept' => 'application/octet-stream',
+      ],
+    ]);
+
+    if (is_wp_error($response)) {
+      wp_delete_file($file);
+
+      return new \WP_Error('wp_updater_download_unresolved', 'Could not reach GitHub to download the update: ' . $response->get_error_message());
+    }
+
+    $status = (int) wp_remote_retrieve_response_code($response);
+    if ($status === 200) {
+      return $file;
+    }
+    wp_delete_file($file);
+
+    if ($status >= 300 && $status < 400) {
+      $location = wp_remote_retrieve_header($response, 'location');
+      if (is_string($location) && $location !== '') {
+        return download_url($location);
+      }
+    }
+
+    return new \WP_Error('wp_updater_download_unresolved', self::downloadFailure($status, $this->repo));
+  }
+
+  /**
+   * What a failed asset download means, by status. Public and separate from
+   * the HTTP call so it can be tested directly.
+   */
+  public static function downloadFailure(int $status, string $repo): string
+  {
+    if ($status === 401) {
+      return 'GitHub rejected the credential (401) when downloading the update.';
+    }
+    if ($status === 403) {
+      return 'GitHub refused the download (403) — rate limited, or the token cannot read ' . $repo . '.';
+    }
+    if ($status === 404) {
+      return 'GitHub has no such release file (404). It was probably replaced or removed since this site last checked for updates.';
+    }
+    if ($status >= 300 && $status < 400) {
+      return 'GitHub redirected the download (HTTP ' . $status . ') without saying where to.';
+    }
+
+    return 'Unexpected response from GitHub when downloading the update (HTTP ' . $status . ').';
+  }
+
+  /**
+   * The URL-only half of {@see download()}, kept because it is part of the
+   * Source contract and callers may use it directly: public assets need no
+   * resolving, and a private asset's 302 is resolved here so the credential
+   * never reaches the storage host. It cannot handle a 200, which is why the
+   * updater calls download() instead.
    */
   public function resolveDownloadUrl(string $url, string $authorization): ?string
   {
