@@ -26,6 +26,19 @@ Plus one header in the plugin's main file:
  * Update URI: https://bitbucket.org/acme/my-plugin
 ```
 
+Since 1.5.0, `register()` also makes updates install into the folder the plugin
+is in, and makes Dashboard › Updates › "Check again" ask the host. If another
+plugin on the same site may ship an older copy of this library, register those
+two yourself as well (see [Two copies on one site](#namespacing)):
+
+```php
+use BlackBrickSoftware\WpArtifactUpdater\V1\{CheckAgain, InstallFolder};
+
+$updater = Updater::register([...]);
+InstallFolder::register(__FILE__);
+CheckAgain::register($updater);
+```
+
 ---
 
 ## Why this exists
@@ -95,7 +108,11 @@ no HTTP requests**. That is what keeps the library out of the way on
 composer-managed installs, where the deploy owns the plugin version and a
 self-update would be reverted on the next deploy.
 
-A public source has nothing to switch it off, so pass `enabled` yourself:
+A public source has nothing to switch it off. Sites where a deploy owns the
+plugins usually set WordPress's own `DISALLOW_FILE_MODS`, which already removes
+the update notice, "Update now" and auto-updates for every plugin; the only
+thing left is the update check WP-Cron still runs, cached like any other. To
+switch this library off for one plugin as well, pass `enabled` yourself:
 
 ```php
 'enabled' => static fn(): bool => !defined('COMPOSER_MANAGED_SITE'),
@@ -156,8 +173,12 @@ Three requirements, each of which fails silently if you get it wrong:
 2. **A single top-level directory named exactly like the plugin folder.** Stage
    into `dist/my-plugin/` and zip *that*. `zip -r my-plugin.zip .` produces an
    archive with no wrapping folder, and WordPress then names the destination
-   after the zip file — installing a *second copy* under a different folder name
-   instead of upgrading. It looks like it worked.
+   after the zip file. On a fresh install that is the folder the plugin lives in
+   from then on. On an update, before 1.5.0, it moved the plugin to a folder
+   WordPress didn't know was the plugin, deactivating it while reporting
+   success. Since 1.5.0 updates are renamed to the installed folder
+   (`InstallFolder`), and an update with no folder inside is refused, but fresh
+   installs still take the zip's name, so the folder still matters.
 3. **A plugin header version that matches the release.** WordPress reads the
    installed version from the header. If the header says `1.0.0` while you
    publish `1.0.2`, every site installs 1.0.2, still reports 1.0.0, and is
@@ -191,6 +212,33 @@ anyone remembers configuring them.
 **Bitbucket token form:** paste a repository access token **on its own**; it is
 sent as `Bearer <token>`. The `x-token-auth:<token>` form is for git over HTTPS
 and the REST API rejects it with a 401 (verified against a live repository).
+
+## Updates go into the folder the plugin is in
+
+WordPress installs an update into the folder its zip names, not the folder the
+plugin is in. When they differ, it removes the old folder, puts the new version
+beside it, and the plugin is deactivated ("Plugin file does not exist") while
+the update reports success. Folders drift for ordinary reasons: an archive with
+no folder inside is installed into one named after the zip (`my_plugin.zip`,
+`my_plugin-1.zip` on a second download, and since WordPress 7.1.4 that name
+plus 16 random characters), GitHub's source archives use `repo-1.2.3`, and
+people rename folders.
+
+`InstallFolder` renames the unpacked update to the installed folder before
+WordPress installs it, on every update path (Update now, bulk, auto-updates,
+WP-CLI: core names the plugin in `hook_extra['plugin']` on all of them). It
+never touches installs, themes or other plugins. An update whose zip has no
+folder inside, or a rename that fails, is refused with a `WP_Error`; the
+plugin's files are unchanged. Like every hook, it only works in a request that
+loaded the plugin, so on multisite the plugin must be network-activated or
+active on the main site, where WordPress runs its update checks.
+
+## "Check again"
+
+Dashboard › Updates › "Check again" (`update-core.php?force-check=1`) has
+WordPress check straight away, but it would get this library's 6-hour cached
+answer. `CheckAgain` calls `forceRecheck()` first, for users who can update
+plugins, so the button really asks the host.
 
 ## Forcing a re-check
 
@@ -231,9 +279,24 @@ a good new one look broken too.
   credential and a missing file are fixed differently.
 - **`Update URI` matters.** Besides routing the check, it stops wordpress.org
   pushing a same-slug plugin onto your sites. Set it even on WP 5.8+.
-- **Version comparison ignores a leading `v`.** `version_compare('v2.0.0',
-  '2.0.0')` is `-1` in PHP, so a `v`-prefixed header would otherwise be offered
-  the same version forever.
+- **Version comparison ignores a leading `v`** in what this library compares and
+  hands WordPress. `version_compare('v2.0.0', '2.0.0')` is `-1` in PHP. WordPress
+  then compares the release with the plugin's own header as written, so keep the
+  `v` out of the header: an installed `Version: v2.1.0` is offered `2.1.0`
+  forever.
+- **WordPress asks wordpress.org first.** `wp_update_plugins()` sends its
+  wordpress.org request before it asks about `Update URI` plugins, and stops if
+  that fails. A site that can't reach api.wordpress.org never asks this library.
+  Besides it, a site must reach the release host: `api.github.com`, `github.com`
+  and GitHub's file storage (`release-assets.githubusercontent.com`), or
+  `api.bitbucket.org` and Bitbucket's.
+- **Requests carry WordPress's usual user agent,** `WordPress/<version>;
+  <site URL>`, as core's own requests to wordpress.org do.
+- **No PHP requirement is reported.** The update offered carries no
+  `requires_php`, so WordPress's auto-updater can't skip a release that needs a
+  newer PHP than the site has. ("Update now" from the Plugins page does check
+  the new version's `Requires PHP` header.) Raise a plugin's PHP requirement
+  with that in mind.
 
 ## Namespacing
 
@@ -249,12 +312,23 @@ PSR-4 maps `BlackBrickSoftware\WpArtifactUpdater\` to `src/`, so a breaking chan
 new `src/V2/` directory and nothing else: no autoload change, and V1 keeps
 working for plugins that haven't moved.
 
-Two plugins on one site can each ship their own copy of V1 in `vendor/` and the
-first one loaded wins. That is harmless because releases within V1 only add:
-`Source` never gains a method, and anything new is an optional extra interface
-(`DirectDownload`, in 1.4.0) that `Updater` checks for. So copies of different
-V1 releases work together whichever classes load from which copy, and an older
-copy simply behaves as it always did. Only an actual breaking change needs a new
+Two plugins on one site can each ship their own copy of V1 in `vendor/`, and
+only one copy of each class loads. Composer puts each plugin's autoloader at the
+front of the queue as it is registered, so for a class that every copy has, the
+copy in the plugin loaded last (WordPress loads plugins in order of their
+folder names) supplies it to all of them. That is harmless because releases
+within V1 only add: `Source` never gains a method, and anything new is an
+optional extra (the `DirectDownload` interface in 1.4.0, the `InstallFolder` and
+`CheckAgain` classes in 1.5.0). So copies of different V1 releases work
+together, and an older copy simply behaves as it always did.
+
+What an older copy can't do is something added after it. If your plugin calls a
+method added in a later release, such as `flush()` or `forceRecheck()` (1.3.0),
+the `Updater` it gets back may come from an older copy that lacks it: check with
+`method_exists()` first. A class added later is different: it exists only in
+the copies that have it, so it always loads from one of them. That is why the
+1.5.0 additions are classes you can register yourself, rather than something
+only `Updater::register()` does. Only an actual breaking change needs a new
 major, and then the two coexist.
 
 **Writing your own source:** implement `Source`. If your host can answer a

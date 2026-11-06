@@ -48,6 +48,13 @@ namespace {
   function wp_tempnam($f = '') { return tempnam(sys_get_temp_dir(), 'wpu'); }
   function wp_delete_file($f) { $GLOBALS['DELETED'][] = $f; @unlink($f); }
   function __($s, $d = null) { return $s; }
+  function add_action($hook, $cb, $p = 10, $n = 1) { $GLOBALS['HOOKS'][] = $hook; }
+  function trailingslashit($s) { return rtrim($s, '/\\') . '/'; }
+  function untrailingslashit($s) { return rtrim($s, '/\\'); }
+  function current_user_can($cap) { return in_array($cap, $GLOBALS['CAPS'] ?? [], true); }
+  // A stand-in for WP_Filesystem's move(): records the call, answers as told.
+  class FakeFilesystem { public array $moves = []; public bool $ok = true;
+    public function move($from, $to, $overwrite = false) { $this->moves[] = [$from, $to, $overwrite]; return $this->ok; } }
 }
 
 namespace BlackBrickSoftware\WpArtifactUpdater\V1 {
@@ -56,6 +63,8 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1 {
   require __DIR__ . '/../src/V1/Updater.php';
   require __DIR__ . '/../src/V1/BitbucketDownloads.php';
   require __DIR__ . '/../src/V1/GitHubReleases.php';
+  require __DIR__ . '/../src/V1/InstallFolder.php';
+  require __DIR__ . '/../src/V1/CheckAgain.php';
 
   $fails = 0;
   function chk(string $label, bool $ok): void { global $fails; if (!$ok) { $fails++; } echo ($ok ? "PASS " : "FAIL ") . $label . "\n"; }
@@ -375,6 +384,57 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1 {
   reset_state();
   $GLOBALS['HTTP'] = fn($u, $a) => ['response' => ['code' => 200], 'body' => '{"tag_name":"v1","assets":[]}'];
   chk('public GitHub verifies with no credential', Updater::verify(new GitHubReleases('acme/my-plugin'), '')['ok'] === true);
+
+  echo "== InstallFolder: updates go into the folder the plugin is in\n";
+  // plugin_basename() is stubbed to my-plugin/my-plugin.php, so the installed folder is my-plugin.
+  reset_state();
+  InstallFolder::register('/plugins/my-plugin/my-plugin.php');
+  chk('hooks upgrader_source_selection', in_array('upgrader_source_selection', $GLOBALS['HOOKS'], true));
+  $GLOBALS['wp_filesystem'] = $fs = new \FakeFilesystem();
+  $mine = ['plugin' => 'my-plugin/my-plugin.php', 'type' => 'plugin', 'action' => 'update'];
+  $r = InstallFolder::filterSource('/up/pkg/my-plugin-1.2.3/', '/up/pkg', null, $mine);
+  chk('a differently named folder is renamed to the installed one', $r === '/up/pkg/my-plugin/' && $fs->moves === [['/up/pkg/my-plugin-1.2.3', '/up/pkg/my-plugin', true]]);
+  $fs->moves = [];
+  chk('the right name already: unchanged, nothing moved', InstallFolder::filterSource('/up/pkg/my-plugin/', '/up/pkg', null, $mine) === '/up/pkg/my-plugin/' && $fs->moves === []);
+  chk('another plugin\'s update: untouched', InstallFolder::filterSource('/up/pkg/x/', '/up/pkg', null, ['plugin' => 'other/other.php']) === '/up/pkg/x/' && $fs->moves === []);
+  chk('an install or a theme (no plugin named): untouched', InstallFolder::filterSource('/up/pkg/x/', '/up/pkg', null, ['type' => 'plugin', 'action' => 'install']) === '/up/pkg/x/'
+    && InstallFolder::filterSource('/up/pkg/x/', '/up/pkg', null, ['theme' => 'x']) === '/up/pkg/x/' && $fs->moves === []);
+  $err = new \WP_Error('earlier', 'an earlier filter failed');
+  chk('a WP_Error from an earlier filter passes through', InstallFolder::filterSource($err, '/up/pkg', null, $mine) === $err);
+  chk('no hook_extra (very old core): untouched', InstallFolder::filterSource('/up/pkg/x/', '/up/pkg') === '/up/pkg/x/');
+  $r = InstallFolder::filterSource('/up/pkg/', '/up/pkg', null, $mine);
+  chk('a zip with no folder inside: refused, not installed under the zip\'s name', is_wp_error($r) && $r->code === 'wp_updater_no_folder' && $fs->moves === []);
+  $fs->ok = false;
+  $r = InstallFolder::filterSource('/up/pkg/my-plugin-1.2.3/', '/up/pkg', null, $mine);
+  chk('the rename fails: a WP_Error, not an install into the wrong folder', is_wp_error($r) && $r->code === 'wp_updater_rename_failed');
+  chk('  and it says the files are unchanged and how to reactivate', strpos($r->message, 'files are unchanged') !== false && strpos($r->message, 'activate it again') !== false);
+  $GLOBALS['wp_filesystem'] = null;
+  chk('no filesystem: a WP_Error, no fatal', is_wp_error(InstallFolder::filterSource('/up/pkg/my-plugin-1.2.3/', '/up/pkg', null, $mine)));
+
+  echo "== CheckAgain: Dashboard > Updates > Check again forgets the cache\n";
+  reset_state();
+  $GLOBALS['HTTP'] = fn($u, $a) => bb_listing(['my-plugin-v2.0.0.zip']);
+  $ca = register();
+  chk('Updater::register() registers it, and InstallFolder', in_array('load-update-core.php', $GLOBALS['HOOKS'], true) && in_array('upgrader_source_selection', $GLOBALS['HOOKS'], true));
+  $cacheKey = 'wpu_release_' . md5('my-plugin/my-plugin.php|bitbucket.org');
+  $seed = function () use ($ca, $cacheKey) { $ca->filterUpdate(false, ['Version' => '1.0.0'], 'my-plugin/my-plugin.php'); return is_array(get_site_transient($cacheKey)); };
+  $seed(); $_GET = []; $GLOBALS['CAPS'] = ['update_plugins'];
+  CheckAgain::onLoad();
+  chk('a plain visit to Dashboard > Updates keeps the cache', is_array(get_site_transient($cacheKey)));
+  $_GET = ['force-check' => '1']; $GLOBALS['CAPS'] = ['update_languages'];
+  CheckAgain::onLoad();
+  chk('Check again by a user who cannot update plugins keeps it', is_array(get_site_transient($cacheKey)));
+  $GLOBALS['CAPS'] = ['update_plugins'];
+  CheckAgain::onLoad();
+  chk('Check again by one who can forgets it', get_site_transient($cacheKey) === false);
+  // An updater from an older V1 copy has no forceRecheck(): skipped, not a fatal.
+  CheckAgain::register(new \stdClass());
+  $seed();
+  CheckAgain::onLoad();
+  chk('an updater without forceRecheck() (V1 before 1.3.0) is skipped, no fatal', get_site_transient($cacheKey) === false);
+  CheckAgain::register(null);
+  chk('null (updates off) is ignored', true);
+  $_GET = []; $GLOBALS['CAPS'] = [];
 
   echo "\n" . ($fails ? "$fails FAILED" : 'ALL PASS') . "\n";
   exit($fails ? 1 : 0);

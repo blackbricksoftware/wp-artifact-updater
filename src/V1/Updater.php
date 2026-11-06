@@ -99,6 +99,11 @@ final class Updater {
     self::$instances[$updater->basename] = $updater;
     $updater->addHooks();
 
+    // Since 1.5.0. Separate classes, so a plugin whose copy of V1 may lose the
+    // autoloader race to an older one can also register them itself; see each.
+    InstallFolder::register($updater->pluginFile);
+    CheckAgain::register($updater);
+
     return $updater;
   }
 

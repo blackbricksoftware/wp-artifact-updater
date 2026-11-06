@@ -24,14 +24,15 @@ namespace BlackBrickSoftware\WpArtifactUpdater\V1;
  *      response"). So this source downloads private assets itself
  *      ({@see download()}) rather than only resolving a URL.
  *
- * A HAZARD NO UPDATER CAN FIX: WordPress installs into the zip's top-level
- * directory, and `zip -r plugin.zip .` produces an archive that has none — the
- * destination then gets derived from the filename instead. Where that differs
- * from the existing plugin folder, the "update" lands beside it as a second
- * copy and looks like it worked. Stage into a directory named exactly like the
- * plugin folder and zip that; see "What your pipeline must produce" in the
- * README. GitHub workflows are likelier to trip on this than Bitbucket ones,
- * which is why it is noted here rather than in the other source.
+ * THE ZIP NEEDS A FOLDER: WordPress installs into the zip's top-level
+ * directory, and `zip -r plugin.zip .` produces an archive that has none, so
+ * the destination is derived from the filename instead. A fresh install then
+ * lives in a folder named after the zip. Updates are renamed to the installed
+ * folder since 1.5.0 ({@see InstallFolder}), and one with no folder inside is
+ * refused. Stage into a directory named exactly like the plugin folder and zip
+ * that; see "What your pipeline must produce" in the README. GitHub workflows
+ * are likelier to trip on this than Bitbucket ones, which is why it is noted
+ * here rather than in the other source.
  */
 final class GitHubReleases implements Source, DirectDownload {
 
